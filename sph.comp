@@ -1,0 +1,301 @@
+#version 430  
+precision highp float;
+
+layout( std430, binding=0 ) buffer Pos{
+   vec4 Positions[]; 
+};
+
+layout( std430, binding=1 ) buffer Vel{
+   vec4 Velocities[]; 
+};
+
+layout( std430, binding=2 ) buffer Ener{
+   float Energies[]; 
+};
+
+layout( std430, binding=3 ) buffer Den{
+   float Densities[]; 
+};
+
+layout( std430, binding=4 ) buffer Pre{
+   float Pressures[]; 
+};
+
+layout( std430, binding=5 ) buffer Mom{
+   vec4 Momentum[]; 
+};
+
+layout( std430, binding=6 ) buffer HashTable{
+   ivec4 Table[][8]; 
+};
+
+layout( local_size_x = 256, local_size_y = 1, local_size_z = 1 ) in;
+
+uniform float PI = 3.14159;
+uniform vec3 GRAVITY = vec3(0, -.98, 0);
+uniform float dt = 0.01;
+uniform float wallDamping = -0.75;
+uniform float pSize = 0.05;
+
+//Uniforms
+layout( location = 0) uniform int	N_PARTICLES;		// Numero de particulas
+layout( location = 1) uniform float SMOOTHING_LENGTH;	// Distancia de suavizado
+layout( location = 2) uniform float density0;			// Densidad en reposo o base
+layout( location = 3) uniform float mass;				// Masa de las particulas
+layout( location = 4) uniform float Ai;					// Coeficiente de rigidez (presion)
+layout( location = 5) uniform float gamma;				// Coeficiente de viscosidad
+layout( location = 6) uniform float surfTen;			// Valor umbral tension superficial
+layout( location = 7) uniform float tamCube;			// Tamanyo del cubo (colisiones)
+layout( location = 8) uniform int grCheck;				// Activar/desactivar la gravedad
+
+//Artificial viscosity variables
+float alpha = 1.0;
+float beta = 2.0;
+float e = 0.01;
+//------------------------------
+
+//Used kernels
+float smooth_kern = 315.0 / (64.0f * PI * pow(SMOOTHING_LENGTH, 9));
+float smooth_grad = 945.0 / (32.0f * PI * pow(SMOOTHING_LENGTH, 9));
+float spiky_grad  = 45.0 / (PI * pow(SMOOTHING_LENGTH, 6));
+
+// IF/ELSE GLSL OPTIMIZATION FUNCTIONS
+float when_eq(float x, float y) {
+  return 1.0 - abs(sign(x - y));
+}
+
+float when_neq(float x, float y) {
+  return abs(sign(x - y));
+}
+
+float when_gt(float x, float y) {
+  return max(sign(x - y), 0.0);
+}
+
+float when_lt(float x, float y) {
+  return max(sign(y - x), 0.0);
+}
+
+float when_ge(float x, float y) {
+  return 1.0 - when_lt(x, y);
+}
+
+float when_le(float x, float y) {
+  return 1.0 - when_gt(x, y);
+}
+
+float when_and(float a, float b) {
+  return a * b;
+}
+
+float when_or(float a, float b) {
+  return min(a + b, 1.0);
+}
+
+float when_not(float a) {
+  return 1.0 - a;
+}
+
+// HASH GRID FUNCTIONS
+ivec4 gridFunc(vec4 p)
+{
+	return ivec4(floor(p.xyz / SMOOTHING_LENGTH), 1.0);
+}
+
+uint hashFunc(ivec4 cellIndex)
+{
+	return (73856093 * cellIndex.x ^ 19349663 * cellIndex.y ^ 83492791 * cellIndex.z) % Table.length();
+}
+
+bool cellInTable(ivec4 cell)
+{
+	for(uint i = 0; i < Table.length(); i++)
+	{
+		for(uint j = 0; j < Table[0].length(); j++)
+		{
+			if(Table[i][j].w == 0)
+				continue;
+			if(Table[i][j] == cell)
+				return true;
+		}
+	}
+
+	return false;
+}
+
+void appendCell2Table(ivec4 cell, uint index)
+{
+	for(uint i = 0; i < Table[index].length(); i++)
+	{
+		if(Table[index][i].w == 0)
+		{
+			Table[index][i] = cell;
+			break;
+		}
+	}
+}
+
+void gridInsert(vec4 coords, uint index)
+{
+	ivec4 cell = gridFunc(coords);
+
+	if(cellInTable(cell))
+		appendCell2Table(cell, index);
+}
+
+void computeNeighbors()
+{
+	
+}
+
+void clearGrid()
+{
+	for(uint i = 0; i < Table.length(); i++)
+	{
+		for(uint j = 0; j < Table[0].length(); j++)
+		{
+			Table[i][j] = ivec4(0);
+		}
+	}
+}
+
+void fillGrid()
+{
+	clearGrid();
+	for(uint i = 0; i < N_PARTICLES; i++)
+	{
+		gridInsert(Positions[i], i);
+	}
+}
+
+float kernelFunction(vec4 q)
+{
+	float kernel = 0.0;
+	float r = length(q.xyz) / SMOOTHING_LENGTH;
+	float base = 1.0 / (PI * pow(SMOOTHING_LENGTH, 3));
+
+	kernel += base * (1 - 1.5*pow(r,2) + 0.75*pow(r,3)) * when_and(when_ge(r, 0), when_le(r, 1));
+	kernel += base * (0.25 * pow((2-r), 3)) * when_and(when_gt(r, 1), when_le(r, 2));
+
+	return kernel;
+}
+
+float MUab(uint a, uint b)
+{
+	vec3 delta = Positions[a].xyz - Positions[b].xyz;
+	return dot(SMOOTHING_LENGTH * delta, Velocities[a].xyz - Velocities[b].xyz) / (pow(length(delta), 2) + e * pow(SMOOTHING_LENGTH, 2));
+}
+
+float artificialViscosity(uint a, uint b)
+{
+	vec3 dPos = Positions[a].xyz - Positions[b].xyz;
+	vec3 dVel = Velocities[a].xyz - Velocities[b].xyz;
+
+	float PIab = (-alpha * MUab(a, b) + beta * pow(MUab(a, b), 2) / ((Densities[a] + Densities[b])/2)) * when_lt(dot(dPos, dVel), 0);
+	return PIab;
+}
+
+void main()
+{
+	uint i = gl_GlobalInvocationID.x;
+
+	// DENSITY - PRESSURE CALCULATION
+	float densSum = 0.0;
+	for(uint j = 0; j < N_PARTICLES; j++)
+	{
+		if(i == j) {continue;}
+		vec4 delta = Positions[i] - Positions[j];
+		densSum += (mass * kernelFunction(delta));
+	}
+
+	Densities[i] = densSum + (0.000001 * when_lt(densSum, 0.000001));	// Pity Density for stability
+	Pressures[i] = Ai * pow(Densities[i], gamma);
+	
+	// PRESSURE, VISCOSITY AND SURFACE TENSION FORCES
+
+	vec3 momentum = vec3(0.0);
+	float energy = 0.0;
+
+	for(uint j = 0; j < N_PARTICLES; j++)
+	{
+		if(i == j) {continue;}
+		vec4 delta = Positions[i] - Positions[j];
+		float Wab = kernelFunction(delta);								// KERNEL VALUE
+		vec3 Eab = normalize(delta.xyz);								// VECTOR COMPONENT OF KERNEL GRADIENT
+		float PIab = artificialViscosity(i, j);							// ARTIFICIAL VISCOSITY
+
+		momentum = momentum + mass * (Pressures[i] / pow(Densities[i], 2) + Pressures[j] / pow(Densities[j], 2) + PIab) * Eab * Wab;
+		energy = energy + mass * (Pressures[i] / pow(Densities[i], 2) + 0.5 * PIab) * dot(Velocities[i].xyz - Velocities[j].xyz, Eab * Wab);
+	}
+
+	Momentum[i] = vec4(momentum , 1.0);
+	Energies[i] = energy;
+
+	// INTEGRATION RK2
+	vec3 acceleration = Momentum[i].xyz + GRAVITY * grCheck;
+    vec3 n05_velocity = Velocities[i].xyz + acceleration * (dt/2);
+    vec3 new_position = Positions[i].xyz + dt * ((n05_velocity + Velocities[i].xyz)/2); 
+	vec3 new_velocity = Velocities[i].xyz + dt * acceleration;
+
+	float dcol, d;
+	vec3 deltaS;
+
+	//COLLISION CHECK
+	// X axis
+	dcol = abs(dot(new_position - vec3(tamCube,0,0), vec3(-1,0,0)));
+	if(dcol < pSize){
+		d = dcol - pSize;
+		deltaS = vec3(-1,0,0) * d * (1+wallDamping);
+		new_velocity -= deltaS;
+		new_velocity = reflect(new_velocity, vec3(-1,0,0));
+	}
+
+	dcol = abs(dot(new_position - vec3(-tamCube,0,0), vec3(1,0,0)));
+	if(dcol < pSize){
+		d = dcol - pSize;
+		deltaS = vec3(1,0,0) * d * (1+wallDamping);
+		new_velocity -= deltaS;
+		new_velocity = reflect(new_velocity, vec3(1,0,0));
+	}
+
+	// Y axis (UP)
+//	dcol = abs(dot(new_position - vec3(0,tamCube,0), vec3(0,-1,0)));
+//	if(dcol < pSize){
+//		d = dcol - pSize;
+//		deltaS = vec3(0,-1,0) * d * (1+wallDamping);
+//		new_velocity -= deltaS;
+//		new_velocity = reflect(new_velocity, vec3(0,-1,0));
+//	}
+
+	// Z axis
+	dcol = abs(dot(new_position - vec3(0,0,tamCube), vec3(0,0,-1)));
+	if(dcol < pSize){
+		d = dcol - pSize;
+		deltaS = vec3(0,0,-1) * d * (1+wallDamping);
+		new_velocity -= deltaS;
+		new_velocity = reflect(new_velocity, vec3(0,0,-1));
+	}
+
+	dcol = abs(dot(new_position - vec3(0,0,-tamCube), vec3(0,0,1)));
+	if(dcol < pSize){
+		d = dcol - pSize;
+		deltaS = vec3(0,0,1) * d * (1+wallDamping);
+		new_velocity -= deltaS;
+		new_velocity = reflect(new_velocity, vec3(0,0,1));
+	}
+
+	// Y Axis (DOWN)
+	dcol = abs(dot(new_position - vec3(0,-tamCube,0), vec3(0,1,0)));
+	if(dcol < pSize){
+		d = dcol - pSize;
+		deltaS = vec3(0,1,0) * d * (0.01);
+		new_velocity -= deltaS;
+		new_velocity = reflect(new_velocity, vec3(0,1,0));
+	}
+
+	Positions[i] = vec4(new_position, 1.0);
+	Velocities[i]= vec4(new_velocity, 1.0);
+	 
+}
+
+
