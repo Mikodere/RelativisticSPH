@@ -33,15 +33,6 @@
     <None Include="sph.comp">
       <Filter>Archivos de origen</Filter>
     </None>
-    <None Include="fluid.vert">
-      <Filter>Archivos de origen</Filter>
-    </None>
-    <None Include="fluid.geom">
-      <Filter>Archivos de origen</Filter>
-    </None>
-    <None Include="fluid.frag">
-      <Filter>Archivos de origen</Filter>
-    </None>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="tga.cpp">

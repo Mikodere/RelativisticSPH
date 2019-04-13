@@ -539,38 +539,6 @@ bool init()
 	printLinkInfoLog(graphicProgramID[1]);
 	validateProgram(graphicProgramID[1]);
 
-	// Graphic shaders program (Particles)
-	// FLUID //
-	graphicProgramID[2] = glCreateProgram();
-
-	//VERTEX PARTICLES
-	GLuint vertexShader2ID = glCreateShader(GL_VERTEX_SHADER);
-	loadSource(vertexShader2ID, "fluid.vert");
-	//std::cout << "Compiling Vertex Shader (Fluid)" << std::endl;
-	glCompileShader(vertexShader2ID);
-	printCompileInfoLog(vertexShader2ID);
-	glAttachShader(graphicProgramID[2], vertexShader2ID);
-
-	//FRAGMENT PARTICLES
-	GLuint fragmentShader2ID = glCreateShader(GL_FRAGMENT_SHADER);
-	loadSource(fragmentShader2ID, "fluid.frag");
-	//std::cout << "Compiling Fragment Shader (Fluid)" << std::endl;
-	glCompileShader(fragmentShader2ID);
-	printCompileInfoLog(fragmentShader2ID);
-	glAttachShader(graphicProgramID[2], fragmentShader2ID);
-
-	//GEOMETRY PARTICLES
-	GLuint geometryShader2ID = glCreateShader(GL_GEOMETRY_SHADER);
-	loadSource(geometryShader2ID, "fluid.geom");
-	//std::cout << "Compiling Geometry Shader (Fluid)" << std::endl;
-	glCompileShader(geometryShader2ID);
-	printCompileInfoLog(geometryShader2ID);
-	glAttachShader(graphicProgramID[2], geometryShader2ID);
-
-	glLinkProgram(graphicProgramID[2]);
-	printLinkInfoLog(graphicProgramID[2]);
-	validateProgram(graphicProgramID[2]);
-
 	// Load sprite for sphere into particles buffer
 	TGAFILE tgaImage;
 	GLuint textId;
@@ -754,26 +722,16 @@ void display()
 		drawCube();
 		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
-		if (!liquid) {
-			//Dibuja Puntos (ESFERAS)
-			glUseProgram(graphicProgramID[1]);
+		//Dibuja Puntos (ESFERAS)
+		glUseProgram(graphicProgramID[1]);
 
-			glUniformMatrix4fv(locUniformMVM, 1, GL_FALSE, &mv[0][0]);
-			glUniformMatrix4fv(locUniformPM, 1, GL_FALSE, &Projection[0][0]);
-			glUniform1i(locUniformSpriteTex, 0);
-			glUniform1f(locUniformSize, partSize);
-			glUniform1f(locUniformDensity, density0);
+		glUniformMatrix4fv(locUniformMVM, 1, GL_FALSE, &mv[0][0]);
+		glUniformMatrix4fv(locUniformPM, 1, GL_FALSE, &Projection[0][0]);
+		glUniform1i(locUniformSpriteTex, 0);
+		glUniform1f(locUniformSize, partSize);
+		glUniform1f(locUniformDensity, density0);
 
-			drawPoints(NUM_PARTICLES);
-		}
-		else {
-			//Dibuja Puntos (FLUIDO)
-			glUseProgram(graphicProgramID[2]);
-
-			glUniformMatrix4fv(locUniformMVPM2, 1, GL_FALSE, &mvp[0][0]);
-
-			drawPoints(NUM_PARTICLES);
-		}
+		drawPoints(NUM_PARTICLES);
 	}
 	glUseProgram(0);
 
@@ -850,9 +808,6 @@ void keyboard(unsigned char key, int x, int y)
 		break;
 	case 'g': case 'G':
 		gravity = !gravity;
-		break;
-	case 'l': case 'L':
-		liquid = !liquid;
 		break;
 	case 'w': case 'W':
 		toWrite = !toWrite;
