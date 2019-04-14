@@ -59,7 +59,7 @@ const int WORK_GROUP_SIZE = 256;
 
 //Uniform variables for the SPH calculations
 int NUM_PARTICLES = 1000;
-float tCubo = 5.f;
+float tCubo = 7.5f;
 float partSize = 0.15f;
 float density0 = 1000.f;
 float Ai = 5.0f;
@@ -77,7 +77,7 @@ std::vector<float>		energy;
 std::vector<float>		densities;
 std::vector<float>		pressures;
 
-const int binSize = 4;
+const int binSize = 128;
 struct Bin
 {
 	glm::ivec4 bins[binSize];
