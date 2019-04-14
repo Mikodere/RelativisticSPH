@@ -767,7 +767,7 @@ void keyboard(unsigned char key, int x, int y)
 		break;
 	case '+':
 		NUM_PARTICLES += 50;
-		smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
+		//smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
 		std::cout << "Particle amount: " << NUM_PARTICLES << std::endl;
 		std::cout << "Particle mass: " << mass << std::endl;
 		std::cout << "Smoothing lenght: " << smoothingLength << std::endl;
@@ -776,7 +776,7 @@ void keyboard(unsigned char key, int x, int y)
 	case '-':
 		if (NUM_PARTICLES > 50) {
 			NUM_PARTICLES -= 50;
-			smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
+			//smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
 		}
 		std::cout << "Particle amount: " << NUM_PARTICLES << std::endl;
 		std::cout << "Particle mass: " << mass << std::endl;

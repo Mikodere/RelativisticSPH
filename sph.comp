@@ -50,14 +50,10 @@ layout( location = 8) uniform int grCheck;				// Activar/desactivar la gravedad
 
 //Artificial viscosity variables
 float alpha = 1.0;
-float beta = 2.0;
+float beta = alpha*2.0;
 float e = 0.01;
 //------------------------------
-
-//Used kernels
-float smooth_kern = 315.0 / (64.0f * PI * pow(SMOOTHING_LENGTH, 9));
-float smooth_grad = 945.0 / (32.0f * PI * pow(SMOOTHING_LENGTH, 9));
-float spiky_grad  = 45.0 / (PI * pow(SMOOTHING_LENGTH, 6));
+vec4[512] neighbors;
 
 // IF/ELSE GLSL OPTIMIZATION FUNCTIONS
 float when_eq(float x, float y) {
@@ -180,6 +176,17 @@ float kernelFunction(vec4 q)
 	return kernel;
 }
 
+//THERMAL ENERGY PER UNIT MASS
+float Ui(uint i)
+{
+	return (Ai * pow(Densities[i], gamma-1) / (gamma - 1));
+}
+
+float Cab(uint a, uint b)
+{
+	return (sqrt((gamma-1)*Ui(a)) + sqrt((gamma-1)*Ui(b)))/2;
+}
+
 float MUab(uint a, uint b)
 {
 	vec3 delta = Positions[a].xyz - Positions[b].xyz;
@@ -191,7 +198,9 @@ float artificialViscosity(uint a, uint b)
 	vec3 dPos = Positions[a].xyz - Positions[b].xyz;
 	vec3 dVel = Velocities[a].xyz - Velocities[b].xyz;
 
-	float PIab = (-alpha * MUab(a, b) + beta * pow(MUab(a, b), 2) / ((Densities[a] + Densities[b])/2)) * when_lt(dot(dPos, dVel), 0);
+	float c = Cab(a, b);
+
+	float PIab = (-alpha * c * MUab(a, b) + beta * pow(MUab(a, b), 2) / ((Densities[a] + Densities[b])/2)) * when_lt(dot(dPos, dVel), 0);
 	return PIab;
 }
 
@@ -209,7 +218,8 @@ void main()
 	}
 
 	Densities[i] = densSum + (0.000001 * when_lt(densSum, 0.000001));	// Pity Density for stability
-	Pressures[i] = Ai * pow(Densities[i], gamma);
+	//Pressures[i] = Ai * pow(Densities[i], gamma);
+	Pressures[i] = (gamma-1) * Densities[i] * Ui(i);
 	
 	// PRESSURE, VISCOSITY AND SURFACE TENSION FORCES
 
@@ -220,9 +230,9 @@ void main()
 	{
 		if(i == j) {continue;}
 		vec4 delta = Positions[i] - Positions[j];
-		float Wab = kernelFunction(delta);								// KERNEL VALUE
-		vec3 Eab = normalize(delta.xyz);								// VECTOR COMPONENT OF KERNEL GRADIENT
-		float PIab = artificialViscosity(i, j);							// ARTIFICIAL VISCOSITY
+		float Wab = kernelFunction(delta);			// KERNEL VALUE
+		vec3 Eab = normalize(delta.xyz);			// VECTOR COMPONENT OF KERNEL GRADIENT
+		float PIab = artificialViscosity(i, j);		// ARTIFICIAL VISCOSITY
 
 		momentum = momentum + mass * (Pressures[i] / pow(Densities[i], 2) + Pressures[j] / pow(Densities[j], 2) + PIab) * Eab * Wab;
 		energy = energy + mass * (Pressures[i] / pow(Densities[i], 2) + 0.5 * PIab) * dot(Velocities[i].xyz - Velocities[j].xyz, Eab * Wab);
