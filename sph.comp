@@ -53,7 +53,7 @@ float alpha = 1.0;
 float beta = alpha*2.0;
 float e = 0.01;
 //------------------------------
-vec4[512] neighbors;
+uvec2[512] neighbors;	// X INDICATES THE NEIGHBOR PARTICLE INDEX, Y INDICATES (1 VALID, 0 EMPTY)
 
 // IF/ELSE GLSL OPTIMIZATION FUNCTIONS
 float when_eq(float x, float y) {
@@ -121,7 +121,8 @@ bool cellInTable(ivec4 cell)
 
 void appendCell2Table(ivec4 cell, uint index)
 {
-	for(uint i = 0; i < Table[index].length(); i++)
+	uint size = Table[index].length();
+	for(uint i = 0; i < size; i++)
 	{
 		if(Table[index][i].w == 0)
 		{
@@ -131,17 +132,37 @@ void appendCell2Table(ivec4 cell, uint index)
 	}
 }
 
+void append2Neighbors(uint index)
+{
+	uint size = neighbors.length();
+	for(uint i = 0; i < size; i++)
+	{
+		if(neighbors[i].y == 0)
+		{
+			neighbors[i] = uvec2(index, 1.0);
+			break;
+		}
+	}
+}
+
 void gridInsert(vec4 coords, uint index)
 {
 	ivec4 cell = gridFunc(coords);
-
 	if(cellInTable(cell))
 		appendCell2Table(cell, index);
 }
 
-void computeNeighbors()
+void computeNeighbors(inout vec4[128] neighs, vec4 pos)
 {
-	
+	uint cell;
+	for(int x = -1; x <= 1; x++){
+		for(int y = -1; y <= 1; y++){
+			for(int z = -1; z <= 1; z++){
+				cell = hashFunc(gridFunc(pos+vec4(x,y,z,0.0)));
+				append2Neighbors(cell);
+			}
+		}
+	}
 }
 
 void clearGrid()
