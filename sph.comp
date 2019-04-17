@@ -26,7 +26,7 @@ layout( std430, binding=5 ) buffer Mom{
 };
 
 layout( std430, binding=6 ) buffer HashTable{
-   ivec4 Table[][128]; 
+   uvec4 Table[]; 
 };
 
 layout( local_size_x = 256, local_size_y = 1, local_size_z = 1 ) in;
@@ -50,10 +50,10 @@ layout( location = 8) uniform int grCheck;				// Activar/desactivar la gravedad
 
 //Artificial viscosity variables
 float alpha = 1.0;
-float beta = alpha*2.0;
-float e = 0.01;
+float beta  = alpha*2.0;
+float e		= 0.01;
 //------------------------------
-uvec2[512] neighbors;	// X INDICATES THE NEIGHBOR PARTICLE INDEX, Y INDICATES (1 VALID, 0 EMPTY)
+uvec2[1024] neighbors;	// X INDICATES THE NEIGHBOR PARTICLE INDEX, Y INDICATES (1 VALID, 0 EMPTY)
 
 // IF/ELSE GLSL OPTIMIZATION FUNCTIONS
 float when_eq(float x, float y) {
@@ -109,9 +109,9 @@ bool cellInTable(ivec4 cell)
 	{
 		for(uint j = 0; j < Table[0].length(); j++)
 		{
-			if(Table[i][j].w == 0)
+			if(Table[i].w == 0)
 				continue;
-			if(Table[i][j] == cell)
+			if(Table[i] == cell)
 				return true;
 		}
 	}
@@ -124,9 +124,9 @@ void appendCell2Table(ivec4 cell, uint index)
 	uint size = Table[index].length();
 	for(uint i = 0; i < size; i++)
 	{
-		if(Table[index][i].w == 0)
+		if(Table[index].w == 0)
 		{
-			Table[index][i] = cell;
+			Table[index] = cell;
 			break;
 		}
 	}
@@ -171,7 +171,7 @@ void clearGrid()
 	{
 		for(uint j = 0; j < Table[0].length(); j++)
 		{
-			Table[i][j] = ivec4(0);
+			Table[i] = ivec4(0);
 		}
 	}
 }

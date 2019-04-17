@@ -77,13 +77,14 @@ std::vector<float>		energy;
 std::vector<float>		densities;
 std::vector<float>		pressures;
 
-const int binSize = 128;
+const int binSize = 16;
 struct Bin
 {
 	glm::ivec4 bins[binSize];
 };
 
-std::vector<Bin>	gridTable;	//Hash table
+//std::vector<Bin>	gridTable;		//Hash table
+std::vector<glm::uvec4>	gridTable;	//Hash table
 
 std::ofstream fout, velOut, tableOut, pressOut, densOut, energyOut;
 int frameCount;
@@ -305,7 +306,7 @@ void initPoints(int numPoints)
 	pressures.resize(numPoints);
 	momentum.resize(numPoints);
 
-	unsigned int tableSize = findNextPrime(ceil(numPoints* 1.3));
+	unsigned int tableSize = (unsigned int)findNextPrime(ceil(numPoints* 1.3));
 	gridTable.resize(tableSize);	//The ideal size for a Hash Table is the next prime after 1.3 times the number of particles
 
 	int n = int(pow(numPoints, 1.0 / 3.0)) + 1;
@@ -338,7 +339,7 @@ void initPoints(int numPoints)
 
 	for (int i = 0; i < tableSize; ++i) {
 		for (int j = 0; j < binSize; ++j) {
-			gridTable[i].bins[j] = glm::ivec4(0.0f);
+			gridTable[i] = glm::ivec4(0.0f);
 		}
 	}
 
@@ -371,7 +372,7 @@ void initPoints(int numPoints)
 
 	//Add table to the compute shader
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, tableSSBO);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(Bin) * tableSize, gridTable.data(), GL_STATIC_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::uvec4) * tableSize, gridTable.data(), GL_STATIC_DRAW);
 
 	// Use SSBO as VBO
 
