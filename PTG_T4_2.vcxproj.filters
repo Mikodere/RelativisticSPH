@@ -33,6 +33,12 @@
     <None Include="sph.comp">
       <Filter>Archivos de origen</Filter>
     </None>
+    <None Include="grid.vert">
+      <Filter>Archivos de origen</Filter>
+    </None>
+    <None Include="grid.frag">
+      <Filter>Archivos de origen</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="tga.cpp">

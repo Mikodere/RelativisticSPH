@@ -25,15 +25,24 @@ layout( std430, binding=5 ) buffer Mom{
    vec4 Momentum[]; 
 };
 
-layout( std430, binding=6 ) buffer HashTable{
-   uvec4 Table[]; 
+layout( std430, binding=6 ) buffer Piv{
+   // X: Number of collisions in the cell
+   // Y: Initial index
+   // z: Final index
+   uvec3 Pivots[]; 
+};
+
+layout( std430, binding=7 ) buffer HT{
+   // X: Object Index
+   // Y: Actual compacted Hash Table
+   uvec2 HashTable[]; 
 };
 
 layout( local_size_x = 256, local_size_y = 1, local_size_z = 1 ) in;
 
 uniform float PI = 3.14159;
 uniform vec3 GRAVITY = vec3(0, -2.5, 0);
-uniform float dt = 0.01;
+uniform float dt = 0.0001;
 uniform float wallDamping = -0.75;
 uniform float pSize = 0.05;
 
@@ -68,6 +77,10 @@ float when_gt(float x, float y) {
   return max(sign(x - y), 0.0);
 }
 
+uint when_gt(uint x, uint y) {
+  return uint(max(sign(x - y), 0));
+}
+
 float when_lt(float x, float y) {
   return max(sign(y - x), 0.0);
 }
@@ -100,90 +113,65 @@ ivec4 gridFunc(vec4 p)
 
 uint hashFunc(ivec4 cellIndex)
 {
-	return (73856093 * cellIndex.x ^ 19349663 * cellIndex.y ^ 83492791 * cellIndex.z) % Table.length();
+	return (73856093 * cellIndex.x ^ 19349663 * cellIndex.y ^ 83492791 * cellIndex.z) % Pivots.length();
 }
 
-bool cellInTable(ivec4 cell)
+uint pos2hash(vec4 pos)
 {
-	for(uint i = 0; i < Table.length(); i++)
+	return hashFunc(gridFunc(pos));
+}
+
+void updateHashTable()
+{
+	uint size = Positions.length();
+	uint hashSize = HashTable.length();
+	for(int i = 0; i < size; i++)
 	{
-		for(uint j = 0; j < Table[0].length(); j++)
-		{
-			if(Table[i].w == 0)
-				continue;
-			if(Table[i] == cell)
-				return true;
-		}
+		uint index = pos2hash(Positions[i]);
+		HashTable[i].x = index;
+		Pivots[i].x++;
 	}
 
-	return false;
-}
-
-void appendCell2Table(ivec4 cell, uint index)
-{
-	uint size = Table[index].length();
-	for(uint i = 0; i < size; i++)
+	uint accum = 0;
+	for(int i = 0; i < hashSize; i++)
 	{
-		if(Table[index].w == 0)
-		{
-			Table[index] = cell;
-			break;
-		}
+		Pivots[i].y = accum * when_gt(Pivots[i].x, 0);
+		accum += Pivots[i].x * when_gt(Pivots[i].x, 0);
+		Pivots[i].z = accum * when_gt(Pivots[i].x, 0);
 	}
-}
 
-void append2Neighbors(uint index)
-{
-	uint size = neighbors.length();
-	for(uint i = 0; i < size; i++)
+	for(int i = 0; i < size; i++)
 	{
-		if(neighbors[i].y == 0)
-		{
-			neighbors[i] = uvec2(index, 1.0);
-			break;
-		}
+		HashTable[Pivots[HashTable[i].x].z - 1].y = i;
+		Pivots[HashTable[i].x] -= 1;
 	}
 }
 
-void gridInsert(vec4 coords, uint index)
-{
-	ivec4 cell = gridFunc(coords);
-	if(cellInTable(cell))
-		appendCell2Table(cell, index);
-}
+//void append2Neighbors(uint index)
+//{
+//	uint size = neighbors.length();
+//	for(uint i = 0; i < size; i++)
+//	{
+//		if(neighbors[i].y == 0)
+//		{
+//			neighbors[i] = uvec2(index, 1.0);
+//			break;
+//		}
+//	}
+//}
 
-void computeNeighbors(inout vec4[128] neighs, vec4 pos)
-{
-	uint cell;
-	for(int x = -1; x <= 1; x++){
-		for(int y = -1; y <= 1; y++){
-			for(int z = -1; z <= 1; z++){
-				cell = hashFunc(gridFunc(pos+vec4(x,y,z,0.0)));
-				append2Neighbors(cell);
-			}
-		}
-	}
-}
-
-void clearGrid()
-{
-	for(uint i = 0; i < Table.length(); i++)
-	{
-		for(uint j = 0; j < Table[0].length(); j++)
-		{
-			Table[i] = ivec4(0);
-		}
-	}
-}
-
-void fillGrid()
-{
-	clearGrid();
-	for(uint i = 0; i < N_PARTICLES; i++)
-	{
-		gridInsert(Positions[i], i);
-	}
-}
+//void computeNeighbors(inout vec4[128] neighs, vec4 pos)
+//{
+//	uint cell;
+//	for(int x = -1; x <= 1; x++){
+//		for(int y = -1; y <= 1; y++){
+//			for(int z = -1; z <= 1; z++){
+//				cell = hashFunc(gridFunc(pos+vec4(x,y,z,0.0)));
+//				append2Neighbors(cell);
+//			}
+//		}
+//	}
+//}
 
 float kernelFunction(vec4 q)
 {
@@ -239,8 +227,8 @@ void main()
 	}
 
 	Densities[i] = densSum + (0.000001 * when_lt(densSum, 0.000001));	// Pity Density for stability
-	//Pressures[i] = Ai * pow(Densities[i], gamma);
 	Pressures[i] = (gamma-1) * Densities[i] * Ui(i);
+	//Pressures[i] = (gamma-1) * Densities[i] * length(Velocities[i]);
 	
 	// PRESSURE, VISCOSITY AND SURFACE TENSION FORCES
 

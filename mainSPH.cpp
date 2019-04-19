@@ -42,25 +42,24 @@ bool fullscreen = false;
 bool mouseDown = false;
 bool animation = false;
 
-bool liquid = false;
 bool gravity = true;
 
 int g_Width = 720;                          // Ancho inicial de la ventana
 int g_Height = 520;                         // Altura incial de la ventana
 
-GLuint cubeVAOHandle, pointsVAOHandle;
+GLuint cubeVAOHandle, pointsVAOHandle, gridVAOHandle;
 GLuint graphicProgramID[3];
 GLuint sphProgramID;
 GLuint locUniformMVPM, locUniformMVPM2, locUniformMVM, locUniformPM;
 GLuint locUniformSpriteTex, locUniformDensity;
-GLuint locUniformSize;
+GLuint locUniformSize, locUniformGridSize;
 
 const int WORK_GROUP_SIZE = 256;
 
 //Uniform variables for the SPH calculations
 int NUM_PARTICLES = 1000;
-float tCubo = 7.5f;
-float partSize = 0.15f;
+float tCubo = 5.f;
+float partSize = 0.1f;
 float density0 = 1000.f;
 float Ai = 5.0f;
 float gamma = 1.5f;
@@ -77,19 +76,14 @@ std::vector<float>		energy;
 std::vector<float>		densities;
 std::vector<float>		pressures;
 
-const int binSize = 16;
-struct Bin
-{
-	glm::ivec4 bins[binSize];
-};
-
 //std::vector<Bin>	gridTable;		//Hash table
-std::vector<glm::uvec4>	gridTable;	//Hash table
+std::vector<glm::uvec3>	pivots;		//Pivots for hash table calculations
+std::vector<glm::uvec2> hashTable;	//Actual Hash table
 
 std::ofstream fout, velOut, tableOut, pressOut, densOut, energyOut;
 int frameCount;
-bool toWrite = true;
-bool toDraw;
+bool toWrite = false;
+bool toDraw = false;
 
 GLuint posSSbo;
 GLuint velSSbo;
@@ -98,6 +92,7 @@ GLuint energySSbo;
 GLuint denSSbo;
 GLuint preSSbo;
 
+GLuint pivotsSSBO;
 GLuint tableSSBO;
 
 //CAMERA CONTROLS
@@ -138,6 +133,8 @@ GLfloat colors1[] = {
 	0, 0, 0, 1,   0, 0, 0, 1,   0, 0, 0, 1,   0, 0, 0, 1,   // v7-v4-v3-v2 (bottom)
 
 	0, 0, 0, 1,   0, 0, 0, 1,   0, 0, 0, 1,   0, 0, 0, 1 }; // v4-v7-v6-v5 (back)
+
+std::vector<glm::vec4> gridVert;	//Grid vertex
 
 //Given a number n, determine if it is prime
 bool isPrime(unsigned int n)
@@ -295,6 +292,50 @@ float map(float valor, float istart, float iend, float ostart, float oend)
 	return ostart + (oend - ostart) * ((valor - istart) / (iend - istart));
 }
 
+void initGrid()
+{
+	gridVert.clear();
+
+	int step = ceil(tCubo * 2 / smoothingLength);
+
+	for (int j = 0; j <= step; j++){
+		for (int i = 0; i <= step; i++) {
+			gridVert.push_back(glm::vec4(map((i / step), 0, 1, -tCubo, tCubo), map((j / 1), 0, step, -tCubo, tCubo), -tCubo, 1.0));
+			gridVert.push_back(glm::vec4(map((i / step), 0, 1, -tCubo, tCubo), map((j / 1), 0, step, -tCubo, tCubo),  tCubo, 1.0));
+		}
+	}
+
+	for (int j = 0; j <= step; j++) {
+		for (int i = 0; i <= step; i++) {
+			gridVert.push_back(glm::vec4(-tCubo, map((i / 1), 0, step, -tCubo, tCubo), map((j / 1), 0, step, -tCubo, tCubo), 1.0));
+			gridVert.push_back(glm::vec4(tCubo,  map((i / 1), 0, step, -tCubo, tCubo), map((j / 1), 0, step, -tCubo, tCubo), 1.0));
+		}
+	}
+
+	for (int j = 0; j <= step; j++) {
+		for (int i = 0; i <= step; i++) {
+			gridVert.push_back(glm::vec4(map((i / 1), 0, step, -tCubo, tCubo), -tCubo, map((j / 1), 0, step, -tCubo, tCubo), 1.0));
+			gridVert.push_back(glm::vec4(map((i / 1), 0, step, -tCubo, tCubo),  tCubo, map((j / 1), 0, step, -tCubo, tCubo), 1.0));
+		}
+	}
+
+	GLuint vboHandle;
+
+	glGenVertexArrays(1, &gridVAOHandle);
+	glBindVertexArray(gridVAOHandle);
+
+	glGenBuffers(1, &vboHandle);
+	glBindBuffer(GL_ARRAY_BUFFER, vboHandle);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * gridVert.size(), NULL, GL_STATIC_DRAW);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(glm::vec4) * gridVert.size(), gridVert.data());
+
+	GLuint loc = glGetAttribLocation(graphicProgramID[2], "aPosition");
+	glEnableVertexAttribArray(loc);
+	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE, 0, (char *)NULL + 0);
+
+	glBindVertexArray(0);
+}
+
 void initPoints(int numPoints) 
 {
 
@@ -306,8 +347,10 @@ void initPoints(int numPoints)
 	pressures.resize(numPoints);
 	momentum.resize(numPoints);
 
+	hashTable.resize(numPoints);	//The hash table will be only n-particles big
+
 	unsigned int tableSize = (unsigned int)findNextPrime(ceil(numPoints* 1.3));
-	gridTable.resize(tableSize);	//The ideal size for a Hash Table is the next prime after 1.3 times the number of particles
+	pivots.resize(tableSize);	//The ideal size for a Hash Table is the next prime after 1.3 times the number of particles
 
 	int n = int(pow(numPoints, 1.0 / 3.0)) + 1;
 
@@ -335,12 +378,12 @@ void initPoints(int numPoints)
 		energy[i]	 = 0.0f;
 		pressures[i] = 0.0f;
 		densities[i] = density0;
+
+		hashTable[i] = glm::uvec2(0.0);
 	}
 
 	for (int i = 0; i < tableSize; ++i) {
-		for (int j = 0; j < binSize; ++j) {
-			gridTable[i] = glm::ivec4(0.0f);
-		}
+		pivots[i] = glm::uvec3(0.0f);
 	}
 
 	glGenBuffers(1, &posSSbo);
@@ -349,6 +392,7 @@ void initPoints(int numPoints)
 	glGenBuffers(1, &denSSbo);
 	glGenBuffers(1, &preSSbo);
 	glGenBuffers(1, &momSSbo);
+	glGenBuffers(1, &pivotsSSBO);
 	glGenBuffers(1, &tableSSBO);
 
 	//Create SSBO instead of VBO
@@ -370,9 +414,13 @@ void initPoints(int numPoints)
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, momSSbo);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::vec4) * NUM_PARTICLES, momentum.data(), GL_STATIC_DRAW);
 
+	//Add pivots to the compute shader
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, pivotsSSBO);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::uvec3) * tableSize, pivots.data(), GL_STATIC_DRAW);
+
 	//Add table to the compute shader
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, tableSSBO);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::uvec4) * tableSize, gridTable.data(), GL_STATIC_DRAW);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, tableSSBO);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::uvec2) * NUM_PARTICLES, hashTable.data(), GL_STATIC_DRAW);
 
 	// Use SSBO as VBO
 
@@ -412,6 +460,13 @@ void drawPoints(int numPoints)
 {
 	glBindVertexArray(pointsVAOHandle);
     glDrawArrays(GL_POINTS, 0, numPoints);
+	glBindVertexArray(0);
+}
+
+void drawGrid(int numPoints)
+{
+	glBindVertexArray(gridVAOHandle);
+	glDrawArrays(GL_LINES, 0, numPoints);
 	glBindVertexArray(0);
 }
 
@@ -464,12 +519,13 @@ bool init()
 
 	//Initialize output file
 	frameCount = 0;
-	toDraw = true;
 	fout = std::ofstream("positions.txt");
 	velOut = std::ofstream("velocities.txt");
 	pressOut = std::ofstream("pressures.txt");
 	densOut = std::ofstream("densities.txt");
 	energyOut = std::ofstream("energies.txt");
+
+	//---------------------------------------------------------------
 
 	//SPH compute shader
 	sphProgramID = glCreateProgram();
@@ -484,6 +540,8 @@ bool init()
 	glLinkProgram(sphProgramID);
 	printLinkInfoLog(sphProgramID);
 	validateProgram(sphProgramID);
+
+	//---------------------------------------------------------------
 
 	// Graphic shaders program (Cube)
 	graphicProgramID[0] = glCreateProgram();
@@ -507,6 +565,33 @@ bool init()
 	glLinkProgram(graphicProgramID[0]);
 	printLinkInfoLog(graphicProgramID[0]);
 	validateProgram(graphicProgramID[0]);
+
+	//---------------------------------------------------------------
+
+	// Graphic shaders program (Grid)
+	graphicProgramID[2] = glCreateProgram();
+
+	//VERTEX GRID
+	GLuint vertexShaderGrid = glCreateShader(GL_VERTEX_SHADER);
+	loadSource(vertexShaderGrid, "grid.vert");
+	//std::cout << "Compiling Vertex Shader (Cube)" << std::endl;
+	glCompileShader(vertexShaderGrid);
+	printCompileInfoLog(vertexShaderGrid);
+	glAttachShader(graphicProgramID[2], vertexShaderGrid);
+
+	//FRAGMENT GRID
+	GLuint fragmentShaderGrid = glCreateShader(GL_FRAGMENT_SHADER);
+	loadSource(fragmentShaderGrid, "grid.frag");
+	//std::cout << "Compiling Fragment Shader (Cube)" << std::endl;
+	glCompileShader(fragmentShaderGrid);
+	printCompileInfoLog(fragmentShaderGrid);
+	glAttachShader(graphicProgramID[2], fragmentShaderGrid);
+
+	glLinkProgram(graphicProgramID[2]);
+	printLinkInfoLog(graphicProgramID[2]);
+	validateProgram(graphicProgramID[2]);
+
+	//---------------------------------------------------------------
 
 	// Graphic shaders program (Particles)
 	// SPHERES //
@@ -540,6 +625,8 @@ bool init()
 	printLinkInfoLog(graphicProgramID[1]);
 	validateProgram(graphicProgramID[1]);
 
+	//---------------------------------------------------------------
+
 	// Load sprite for sphere into particles buffer
 	TGAFILE tgaImage;
 	GLuint textId;
@@ -559,6 +646,11 @@ bool init()
 	//INITIALIZE CUBE
 	initCube();
 	locUniformMVPM = glGetUniformLocation(graphicProgramID[0], "uModelViewProjMatrix");
+	locUniformGridSize = glGetUniformLocation(graphicProgramID[0], "uStepSize");
+
+	//INITIALIZE GRID
+	initGrid();
+	locUniformMVPM = glGetUniformLocation(graphicProgramID[2], "uModelViewProjMatrix");
 
 	//INITIALIZE PARTICLES
 	initPoints(NUM_PARTICLES);
@@ -712,28 +804,39 @@ void display()
 		++frameCount;
 	}
 
+	
+	// Dibuja Cubo
+	glUseProgram(graphicProgramID[0]);
+
+	glUniformMatrix4fv(locUniformMVPM, 1, GL_FALSE, &mvp[0][0]);
+	glUniform1f(locUniformGridSize, smoothingLength);
+
+	glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	drawCube();
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+	//
 	if (toDraw)
 	{
-		// Dibuja Cubo
-		glUseProgram(graphicProgramID[0]);
+		glUseProgram(graphicProgramID[2]);
 
 		glUniformMatrix4fv(locUniformMVPM, 1, GL_FALSE, &mvp[0][0]);
+		glUniform1f(locUniformGridSize, smoothingLength);
 
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-		drawCube();
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
-		//Dibuja Puntos (ESFERAS)
-		glUseProgram(graphicProgramID[1]);
-
-		glUniformMatrix4fv(locUniformMVM, 1, GL_FALSE, &mv[0][0]);
-		glUniformMatrix4fv(locUniformPM, 1, GL_FALSE, &Projection[0][0]);
-		glUniform1i(locUniformSpriteTex, 0);
-		glUniform1f(locUniformSize, partSize);
-		glUniform1f(locUniformDensity, density0);
-
-		drawPoints(NUM_PARTICLES);
+		drawGrid(gridVert.size());
 	}
+
+	//Dibuja Puntos (ESFERAS)
+	glUseProgram(graphicProgramID[1]);
+
+	glUniformMatrix4fv(locUniformMVM, 1, GL_FALSE, &mv[0][0]);
+	glUniformMatrix4fv(locUniformPM, 1, GL_FALSE, &Projection[0][0]);
+	glUniform1i(locUniformSpriteTex, 0);
+	glUniform1f(locUniformSize, partSize);
+	glUniform1f(locUniformDensity, density0);
+
+	drawPoints(NUM_PARTICLES);
+
 	glUseProgram(0);
 
 	glutSwapBuffers();
@@ -768,7 +871,7 @@ void keyboard(unsigned char key, int x, int y)
 		break;
 	case '+':
 		NUM_PARTICLES += 50;
-		//smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
+		smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
 		std::cout << "Particle amount: " << NUM_PARTICLES << std::endl;
 		std::cout << "Particle mass: " << mass << std::endl;
 		std::cout << "Smoothing lenght: " << smoothingLength << std::endl;
@@ -777,7 +880,7 @@ void keyboard(unsigned char key, int x, int y)
 	case '-':
 		if (NUM_PARTICLES > 50) {
 			NUM_PARTICLES -= 50;
-			//smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
+			smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
 		}
 		std::cout << "Particle amount: " << NUM_PARTICLES << std::endl;
 		std::cout << "Particle mass: " << mass << std::endl;
