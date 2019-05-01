@@ -42,7 +42,7 @@ bool fullscreen = false;
 bool mouseDown = false;
 bool animation = false;
 
-bool gravity = true;
+bool gravity = false;
 
 int g_Width = 720;                          // Ancho inicial de la ventana
 int g_Height = 520;                         // Altura incial de la ventana
@@ -62,12 +62,14 @@ float tCubo = 5.f;
 float partSize = 0.1f;
 float density0 = 1000.f;
 float Ai = 5.0f;
-float gamma = 1.5f;
+float gamma = 1.4f;
 float surfTens = .50f;
-float volume = (tCubo*tCubo*tCubo) / 1000;
-float mass = (volume * density0)/NUM_PARTICLES;
-float smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES)/(4.0f*3.14159f*density0), (1.0/3.0));
+float volume;
+float mass;
+float eta;
+float smoothingLength;
 
+//BUFFERS FOR THE SSBO
 std::vector<glm::vec4>	position;
 std::vector<glm::vec4>	velocity;
 std::vector<glm::vec4>	color;
@@ -75,15 +77,17 @@ std::vector<glm::vec4>	momentum;
 std::vector<float>		energy;
 std::vector<float>		densities;
 std::vector<float>		pressures;
+std::vector<glm::vec2>	smoothLen;
 
-//std::vector<Bin>	gridTable;		//Hash table
 std::vector<glm::uvec3>	pivots;		//Pivots for hash table calculations
 std::vector<glm::uvec2> hashTable;	//Actual Hash table
 
-std::ofstream fout, velOut, tableOut, pressOut, densOut, energyOut;
+std::ofstream fout, velOut, tableOut, pressOut, densOut, energyOut, hOut;
 int frameCount;
-bool toWrite = false;
+bool toWrite = true;
 bool toDraw = false;
+
+bool shockTube = false;
 
 GLuint posSSbo;
 GLuint velSSbo;
@@ -91,7 +95,7 @@ GLuint momSSbo;
 GLuint energySSbo;
 GLuint denSSbo;
 GLuint preSSbo;
-
+GLuint smlSSbo;
 GLuint pivotsSSBO;
 GLuint tableSSBO;
 
@@ -338,6 +342,10 @@ void initGrid()
 
 void initPoints(int numPoints) 
 {
+	volume = (tCubo*tCubo*tCubo) / 1000;
+	mass = (volume * density0) / NUM_PARTICLES;
+	eta = 1.35;
+	smoothingLength = eta*(float)pow(mass / density0, (1.0 / 3.0));
 
 	position.resize(numPoints);
 	velocity.resize(numPoints);
@@ -346,40 +354,69 @@ void initPoints(int numPoints)
 	densities.resize(numPoints);
 	pressures.resize(numPoints);
 	momentum.resize(numPoints);
+	smoothLen.resize(numPoints);
 
 	hashTable.resize(numPoints);	//The hash table will be only n-particles big
 
 	unsigned int tableSize = (unsigned int)findNextPrime(ceil(numPoints* 1.3));
 	pivots.resize(tableSize);	//The ideal size for a Hash Table is the next prime after 1.3 times the number of particles
 
-	int n = int(pow(numPoints, 1.0 / 3.0)) + 1;
+	if (shockTube)
+	{
+		for (int i = 0; i < numPoints; ++i)
+		{
+			float xCube = map(i, 0, numPoints, -tCubo, tCubo);
+			position[i] = glm::vec4(xCube, 0.0, 0.0, 1.0);
+			velocity[i] = glm::vec4(0.0);
+			momentum[i] = glm::vec4(0.0);
+			energy[i] = 0.0f;
+			smoothLen[i] = glm::vec2(smoothingLength, 0.0);
+			hashTable[i] = glm::uvec2(0.0);
+		}
 
-	for (int i = 0; i < n; i++) {
-		for (int j = 0; j < n; j++) {
-			for (int k = 0; k < n; k++) {
-				int idx = i * n*n + j * n + k;
-				float x = i * tCubo / n;
-				float y = j * tCubo / n;
-				float z = k * tCubo / n;
-				float frac = tCubo / 2;
-				x = map(x, 0, tCubo, -tCubo + frac, tCubo - frac);
-				y = map(y, 0, tCubo, -tCubo + frac, tCubo - frac);
-				z = map(z, 0, tCubo, -tCubo + frac, tCubo - frac);
+		for (int i = 0; i < numPoints/2; ++i) {
+			pressures[i] = 1.0f;
+			densities[i] = density0/10;
+			
+		}
 
-				if (idx < numPoints)
-					position[idx] = glm::vec4(x, y, z, 1.0);
-			}
+		for (int i = numPoints/2; i < numPoints; ++i) {
+			pressures[i] = 8.0f;
+			densities[i] = density0*10;
 		}
 	}
 
-	for (int i = 0; i < numPoints; ++i) {
-		velocity[i]  = glm::vec4(0.0);
-		momentum[i]  = glm::vec4(0.0);
-		energy[i]	 = 0.0f;
-		pressures[i] = 0.0f;
-		densities[i] = density0;
+	else
+	{
+		int n = int(pow(numPoints, 1.0 / 3.0)) + 1;
+		for (int i = 0; i < n; i++) {
+			for (int j = 0; j < n; j++) {
+				for (int k = 0; k < n; k++) {
+					int idx = i * n*n + j * n + k;
+					float x = i * tCubo / n;
+					float y = j * tCubo / n;
+					float z = k * tCubo / n;
+					float frac = tCubo / 2;
+					x = map(x, 0, tCubo, -tCubo + frac, tCubo - frac);
+					y = map(y, 0, tCubo, -tCubo + frac, tCubo - frac);
+					z = map(z, 0, tCubo, -tCubo + frac, tCubo - frac);
 
-		hashTable[i] = glm::uvec2(0.0);
+					if (idx < numPoints)
+						position[idx] = glm::vec4(x, y, z, 1.0);
+				}
+			}
+		}
+
+		for (int i = 0; i < numPoints; ++i) {
+			velocity[i]  = glm::vec4(0.0);
+			momentum[i]  = glm::vec4(0.0);
+			energy[i]    = 100.0f;
+			pressures[i] = 100.0f;
+			densities[i] = density0;
+			smoothLen[i] = glm::vec2(smoothingLength, 0.0);
+			hashTable[i] = glm::uvec2(0.0);
+		}
+
 	}
 
 	for (int i = 0; i < tableSize; ++i) {
@@ -392,6 +429,7 @@ void initPoints(int numPoints)
 	glGenBuffers(1, &denSSbo);
 	glGenBuffers(1, &preSSbo);
 	glGenBuffers(1, &momSSbo);
+	glGenBuffers(1, &smlSSbo);
 	glGenBuffers(1, &pivotsSSBO);
 	glGenBuffers(1, &tableSSBO);
 
@@ -421,6 +459,10 @@ void initPoints(int numPoints)
 	//Add table to the compute shader
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, tableSSBO);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::uvec2) * NUM_PARTICLES, hashTable.data(), GL_STATIC_DRAW);
+
+	//Different particles now have different smoothing lengths
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, smlSSbo);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::vec2) * NUM_PARTICLES, smoothLen.data(), GL_STATIC_DRAW);
 
 	// Use SSBO as VBO
 
@@ -524,6 +566,7 @@ bool init()
 	pressOut = std::ofstream("pressures.txt");
 	densOut = std::ofstream("densities.txt");
 	energyOut = std::ofstream("energies.txt");
+	hOut = std::ofstream("smoothOmega.txt");
 
 	//---------------------------------------------------------------
 
@@ -712,17 +755,17 @@ void display()
 		GLfloat* ptr;
 		ptr = (GLfloat*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
 
-		fout << "Frame " << frameCount << std::endl;
+		//fout << "Frame " << frameCount << std::endl;
 
-		for (int i = 0; i < NUM_PARTICLES/10; i++)
+		for (int i = 0; i < NUM_PARTICLES-1; i++)
 		{
-			fout << i << ": " <<
-				ptr[i * 4] << ", " <<
-				ptr[i * 4 + 1] << ", " <<
-				ptr[i * 4 + 2] << ", " <<
-				ptr[i * 4 + 3] << " | ";
+			fout << i << ", " <<
+				ptr[i * 4] << ", ";
+				//ptr[i * 4 + 1] << ", " <<
+				//ptr[i * 4 + 2] << ", " <<
+				//ptr[i * 4 + 3] << " | ";
 		}
-
+		fout << (NUM_PARTICLES - 1) << ", " << ptr[(NUM_PARTICLES - 1) * 4];
 		fout << std::endl;
 
 		glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
@@ -732,18 +775,38 @@ void display()
 		GLfloat* ptrVel;
 		ptrVel = (GLfloat*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
 
-		velOut << "Frame " << frameCount << std::endl;
+		//velOut << "Frame " << frameCount << std::endl;
 
-		for (int i = 0; i < NUM_PARTICLES / 10; i++)
+		for (int i = 0; i < NUM_PARTICLES-1; i++)
 		{
-			velOut << i << ": " <<
-				ptrVel[i * 4] << ", " <<
-				ptrVel[i * 4 + 1] << ", " <<
-				ptrVel[i * 4 + 2] << ", " <<
-				ptrVel[i * 4 + 3] << " | ";
+			velOut << i << ", " <<
+				ptrVel[i * 4] << ", ";
+				//ptrVel[i * 4 + 1] << ", " <<
+				//ptrVel[i * 4 + 2] << ", " <<
+				//ptrVel[i * 4 + 3] << " | ";
 		}
-
+		velOut << (NUM_PARTICLES - 1) << ", " << ptrVel[(NUM_PARTICLES - 1) * 4];
 		velOut << std::endl;
+
+		glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+
+		//SMOOTHING LENGTH + OMEGA
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, smlSSbo);
+		GLfloat* ptrSml;
+		ptrSml = (GLfloat*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
+
+		//velOut << "Frame " << frameCount << std::endl;
+
+		for (int i = 0; i < NUM_PARTICLES - 1; i++)
+		{
+			hOut << i << ", " <<
+				ptrSml[i * 4] << ", " <<
+				ptrSml[i * 4 + 1] << ", ";
+			//ptrVel[i * 4 + 2] << ", " <<
+			//ptrVel[i * 4 + 3] << " | ";
+		}
+		hOut << (NUM_PARTICLES - 1) << ", " << ptrVel[(NUM_PARTICLES - 1) * 4];
+		hOut << std::endl;
 
 		glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
 
@@ -752,14 +815,14 @@ void display()
 		GLfloat* ptrPress;
 		ptrPress = (GLfloat*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
 
-		pressOut << "Frame " << frameCount << std::endl;
+		//pressOut << "Frame " << frameCount << std::endl;
 
-		for (int i = 0; i < NUM_PARTICLES/8; i++)
+		for (int i = 0; i < NUM_PARTICLES-1; i++)
 		{
-			pressOut << i << ": " <<
-				ptrPress[i] << " | ";
+			pressOut << i << ", " <<
+				ptrPress[i] << ", ";
 		}
-
+		pressOut << (NUM_PARTICLES - 1) << ", " << ptrPress[(NUM_PARTICLES - 1)];
 		pressOut << std::endl;
 
 		glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
@@ -769,14 +832,14 @@ void display()
 		GLfloat* ptrDens;
 		ptrDens = (GLfloat*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
 
-		densOut << "Frame " << frameCount << std::endl;
+		//densOut << "Frame " << frameCount << std::endl;
 
-		for (int i = 0; i < NUM_PARTICLES/8; i++)
+		for (int i = 0; i < NUM_PARTICLES-1; i++)
 		{
-			densOut << i << ": " <<
-				ptrDens[i] << " | ";
+			densOut << i << ", " <<
+				ptrDens[i] << ", ";
 		}
-
+		densOut << (NUM_PARTICLES - 1) << ", " << ptrDens[(NUM_PARTICLES - 1)];
 		densOut << std::endl;
 
 		//std::cout << "Density: " << ptrDens[0] << " |  Pressure: " << ptrPress[0] << std::endl;
@@ -788,14 +851,14 @@ void display()
 		GLfloat* ptrEnergy;
 		ptrEnergy = (GLfloat*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
 
-		energyOut << "Frame " << frameCount << std::endl;
+		//energyOut << "Frame " << frameCount << std::endl;
 
-		for (int i = 0; i < NUM_PARTICLES/8; i++)
+		for (int i = 0; i < NUM_PARTICLES-1; i++)
 		{
-			energyOut << i << ": " <<
-				ptrEnergy[i] << " | ";
+			energyOut << i << ", " <<
+				ptrEnergy[i] << ", ";
 		}
-
+		energyOut << (NUM_PARTICLES - 1) << ", " << ptrEnergy[(NUM_PARTICLES - 1)];
 		energyOut << std::endl;
 
 		glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
@@ -871,20 +934,18 @@ void keyboard(unsigned char key, int x, int y)
 		break;
 	case '+':
 		NUM_PARTICLES += 50;
-		smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
 		std::cout << "Particle amount: " << NUM_PARTICLES << std::endl;
-		std::cout << "Particle mass: " << mass << std::endl;
-		std::cout << "Smoothing lenght: " << smoothingLength << std::endl;
+		std::cout << "Smoothing length: " << smoothingLength << std::endl;
+		std::cout << "Mass: " << mass << std::endl;
 		init();
 		break;
 	case '-':
 		if (NUM_PARTICLES > 50) {
 			NUM_PARTICLES -= 50;
-			smoothingLength = (float)pow((3.0f*mass*NUM_PARTICLES) / (4.0f*3.14159f*density0), (1.0 / 3.0));
 		}
 		std::cout << "Particle amount: " << NUM_PARTICLES << std::endl;
-		std::cout << "Particle mass: " << mass << std::endl;
-		std::cout << "Smoothing lenght: " << smoothingLength << std::endl;
+		std::cout << "Smoothing length: " << smoothingLength << std::endl;
+		std::cout << "Mass: " << mass << std::endl;
 		init();
 		break;
 	case 'd': case 'D':
@@ -919,17 +980,17 @@ void keyboard(unsigned char key, int x, int y)
 	case 'e': case 'E':
 		toDraw = !toDraw;
 		break;
-	case 'm': case 'M':
-		mass += .005f;
-		std::cout << "Mass: " << mass << std::endl;
-		init();
-		break;
-	case 'n': case 'N':
-		if (mass > 0.0001)
-			mass -= .005f;
-		std::cout << "Mass: " << mass << std::endl;
-		init();
-		break;
+	//case 'm': case 'M':
+	//	mass += .005f;
+	//	std::cout << "Mass: " << mass << std::endl;
+	//	init();
+	//	break;
+	//case 'n': case 'N':
+	//	if (mass > 0.0001)
+	//		mass -= .005f;
+	//	std::cout << "Mass: " << mass << std::endl;
+	//	init();
+	//	break;
 	}
 }
  

@@ -27,7 +27,7 @@ vec3 colors[] = { vec3(0.0,		0.0,		maxCol),
 				  vec3(maxCol,  maxCol/2,	0.0), 
 				  vec3(maxCol,  0.0,		0.0)};
 
-float top = 3.0;
+float top = 1.0;
 float ranges[] = {top, top - top/5, top-2*top/5, top-3*top/5, top-4*top/5, 0.0};
 
 float when_gt(float x, float y) {
